@@ -1,34 +1,37 @@
-import numpy as np
 import os
-import sklearn.metrics as metrics
-from sklearn.metrics import roc_auc_score
-import torch
-from models.ViT import ViT_AvgPool_3modal_CrossAtten_Channel
-# from models.ldc_diff_4classifier_mixadain import Mainmodal2
-
-import logging
-from pytz import timezone
-from datetime import datetime
-import torchvision.transforms as transforms
 import sys
-import torch.nn.functional as F
-import torch.nn as nn
-import gc
-from thop import profile
+import logging
 import time
 import glob
 import argparse
-from intradataloader import *
+from datetime import datetime
+
+import numpy as np
 import pandas as pd
 from scipy import interpolate
-from loss.loss import *
+import sklearn.metrics as metrics
+from sklearn.metrics import roc_auc_score
+from thop import profile
+from pytz import timezone
+import torchvision.transforms as transforms
+import torch.nn.functional as F
+import torch.nn as nn
+import torch
+
+# from intradataloader import *
+# from loss.loss import *
+from balanceloader import *
+from models.ViT import ViT_AvgPool_2modal_CrossAtten_Channel
+
+
+np.random.seed(42)
+torch.manual_seed(42)
+logging.Formatter.converter = lambda *args: datetime.now(tz=timezone('Asia/Taipei')).timetuple()
 
 def mkdir(path):
     if not os.path.exists(path):
         os.makedirs(path)
 
-np.random.seed(42)
-torch.manual_seed(42)
 def calculate_tpr_at_fpr(labels, predictions, target_fpr=0.001):
     sorted_indices = np.argsort(predictions)[::-1].astype(int)
     
@@ -53,9 +56,6 @@ def calculate_interpolated_tpr(fpr, tpr, fpr_threshold=0.001):
     interpolated_tpr = np.interp(fpr_threshold, fpr, tpr)
     return interpolated_tpr
 
-
-logging.Formatter.converter = lambda *args: datetime.now(tz=timezone('Asia/Taipei')).timetuple()
-
 def Find_Optimal_Cutoff(TPR, FPR, threshold):
     # y = TPR - FPR
     y = TPR + (1 - FPR)
@@ -64,7 +64,6 @@ def Find_Optimal_Cutoff(TPR, FPR, threshold):
     optimal_threshold = threshold[Youden_index]
     point = [FPR[Youden_index], TPR[Youden_index]]
     return optimal_threshold, point
-
 
 def NormalizeData(data):
     return (data - np.min(data)) / (np.max(data) - np.min(data))
@@ -75,72 +74,35 @@ def NormalizeData_torch(data):
 
 #receive arguments from command line for testing_dataset
 parser = argparse.ArgumentParser(description="config")
-parser.add_argument("--train_dataset", type=str)
-parser.add_argument("--test_dataset", type=str)
-parser.add_argument("--missing", type=str, default='none')
+parser.add_argument("--train_dataset", type=str, default='CASIA_SURF')
+parser.add_argument("--test_dataset", type=str, default='CASIA_SURF')
+parser.add_argument("--data_root", type=str, default='/media/back/home/chuck/Dataset/CASIA_SURF/challenge/train')
+parser.add_argument("--result_path", type=str, default='./saved/')
+parser.add_argument("--batch_size", type=int, default=512)
 args = parser.parse_args()
 
-string = parser.test_dataset
-missing = parser.missing # "RRR"
-
-# os.environ['CUDA_VISIBLE_DEVICES'] = '0,1'
-testing_datasets = [string]
-batch_size = 500
-dataset1 = args.train_dataset
-# dataset1 = 'W'
+train_dataset = args.train_dataset
+test_dataset = args.test_dataset
+root = args.data_root
+results_path = args.result_path
+batch_size = args.batch_size
 device_id = 'cuda:0'
 
-results_filename = dataset1.replace('/', '_') + '_MMDG' #_final_version_
-results_path = '/shared/shared/yitinglin/PR/' + results_filename
-
-if testing_datasets[0] == 'grandtest':
-    root = '/shared/shared/WMCA/grandtest'
-if testing_datasets[0] == 'LOO_glasses':
-    root = '/shared/shared/WMCA/LOO_glasses'
-if testing_datasets[0] == 'LOO_rigidmask':
-    root = '/shared/shared/WMCA/LOO_rigidmask'
-if testing_datasets[0] == 'LOO_papermask':
-    root = '/shared/shared/WMCA/LOO_papermask'
-if testing_datasets[0] == 'LOO_prints':
-    root = '/shared/shared/WMCA/LOO_prints'
-if testing_datasets[0] == 'LOO_replay':
-    root = '/shared/shared/WMCA/LOO_replay'
-if testing_datasets[0] == 'LOO_flexiblemask':
-    root = '/shared/shared/WMCA/LOO_flexiblemask'
-if testing_datasets[0] == 'LOO_fakehead':
-    root = '/shared/shared/WMCA/LOO_fakehead'
-
-if dataset1 == 'C' or dataset1 == 'W' or dataset1 == 'S':
-    root = '/shared/shared/domain-generalization-multi/'
-
-# if testing_datasets[0] == 'intraC':
-#     root = '/shared/CeFA_intra/' + sys.argv[4]
-if testing_datasets[0] == 'intraS':
-    root = '/shared/shared/SURF_intra2/'
-
-#logger_filename = results_filename + "_" + string + "_" + missing
-logger_filename = 'MMDG_' + dataset1 + '_to_' + string + '_' + missing
-
-
-mkdir('/home/s113062513/PR/logger/test/')
-file_handler = logging.FileHandler(filename='/home/s113062513/PR/logger/test/' + logger_filename +'_test.log')
+file_handler = logging.FileHandler(filename='test.log')
 stdout_handler = logging.StreamHandler(stream=sys.stdout)
 handlers = [file_handler, stdout_handler]
 date = '%(asctime)s %(levelname)s: %(message)s'
 logging.basicConfig(level=logging.INFO, format=date, handlers=handlers)
 
 
-data_loader = get_loader(root = root, protocol=testing_datasets , batch_size=batch_size, shuffle=False, train=False, size = 224)
+data_loader = get_loader(root=root, protocol=['train_list.txt'], batch_size=batch_size, shuffle=False, mode='test', size=256, cls=None)
 
+Fas_Net = ViT_AvgPool_2modal_CrossAtten_Channel().to(device_id)
 
-Fas_Net = ViT_AvgPool_3modal_CrossAtten_Channel().to(device_id)
-
-logging.info(f"# of testing: {len(data_loader)} on {testing_datasets[0]}")
+logging.info(f"# of testing: {len(data_loader)} on {test_dataset} dataset")
 logging.info(f"path: {results_path}")
 
 record = [1,100,100,100,100,100]
-
-length = int(len(glob.glob(results_path + '/*.pth')) / 2) 
 
 model_save_step = 10
 model_save_epoch = 1
@@ -150,88 +112,78 @@ time_sum = 0
 log_list = []
 
 with torch.no_grad():
+    epoch = 10
+    loaded_dict = torch.load(results_path + f"/FASNet-epoch{epoch}.tar", weights_only=True)
+    Fas_Net.load_state_dict(loaded_dict)
+    Fas_Net.eval()
+
+    score_list = []
+    score_list_live = []
+    score_list_spoof = []
+    Total_score_list_cs = []
+    Total_score_list_all = []
     
-    for step in reversed(range(1, length)):
-        # if epoch %10 != 0:
-        #     continue
+    label_list = []
+    TP = 0.0000001
+    TN = 0.0000001
+    FP = 0.0000001
+    FN = 0.0000001
+    for i, data in enumerate(data_loader):
+        rgb_img, depth_img, ir_img, labels = data
+        rgb_img = rgb_img.to(device_id)
+        ir_img = ir_img.to(device_id)
+        
+        rgb_img     = NormalizeData_torch((rgb_img))
+        ir_img      = NormalizeData_torch((ir_img))
+        
+        pred, _, _ = Fas_Net(rgb_img, ir_img)
+         
+        score = F.softmax(pred, dim=1).cpu().data.numpy()[:, 1]  # multi class
 
-        ugca_loaded_dict = torch.load(results_path + "/FASNet-ugca-" + str(step) + ".pth", weights_only=True)
-        classifier_loaded_dict = torch.load(results_path + "/FASNet-classifier-" + str(step) + ".pth", weights_only=True)
-        Fas_Net.ugca.load_state_dict(ugca_loaded_dict)
-        Fas_Net.classifier.load_state_dict(classifier_loaded_dict)
-        Fas_Net.eval()
+        for j in range(rgb_img.size(0)):
+            score_list.append(score[j])
+            label_list.append(labels[j])
+
+    for i in range(0, len(label_list)):
+        Total_score_list_cs.append(score_list[i]) 
+        if score_list[i] == None:
+            print(score_list[i])
+    # if there is nan in Total_score_list_cs, print it out
+    fpr, tpr, thresholds_cs = metrics.roc_curve(label_list, Total_score_list_cs)
+    threshold_cs, optimal_point = Find_Optimal_Cutoff(TPR=tpr, FPR=fpr, threshold=thresholds_cs)
+
+    for i in range(len(Total_score_list_cs)):
+        score = Total_score_list_cs[i]
+        if (score >= threshold_cs and label_list[i] == 1):
+            TP += 1
+        elif (score < threshold_cs and label_list[i] == 0):
+            TN += 1
+        elif (score >= threshold_cs and label_list[i] == 0):
+            FP += 1
+        elif (score < threshold_cs and label_list[i] == 1):
+            FN += 1
+
+    APCER = FP / (TN + FP)
+    NPCER = FN / (FN + TP)
     
-        step = step * model_save_step
+    if record[1]>((APCER + NPCER) / 2):
+        record[0]=epoch
+        record[1]=((APCER + NPCER) / 2)
+        record[2]=roc_auc_score(label_list, score_list)
+        record[3]=APCER
+        record[4]=NPCER
+        record[5]=calculate_tpr_at_fpr(label_list, NormalizeData(score_list))
 
-        score_list = []
-        score_list_live = []
-        score_list_spoof = []
-        Total_score_list_cs = []
-        Total_score_list_all = []
-        
-        label_list = []
-        TP = 0.0000001
-        TN = 0.0000001
-        FP = 0.0000001
-        FN = 0.0000001
-        for i, data in enumerate(data_loader):
-            rgb_img, depth_img, ir_img, labels = data
-            rgb_img = rgb_img.to(device_id)
-            depth_img = depth_img.to(device_id)
-            ir_img = ir_img.to(device_id)
-            
-            rgb_img     = NormalizeData_torch((rgb_img))
-            depth_img   = NormalizeData_torch((depth_img))
-            ir_img      = NormalizeData_torch((ir_img))
-            
-            pred, _, _, _ = Fas_Net(rgb_img, ir_img, depth_img)
-             
-            score = F.softmax(pred, dim=1).cpu().data.numpy()[:, 1]  # multi class
+    log_list.append([epoch, np.round(APCER, 4), np.round(NPCER, 4), np.round((APCER + NPCER) / 2, 4)])
 
-            for j in range(rgb_img.size(0)):
-                score_list.append(score[j])
-                label_list.append(labels[j])
-
-        for i in range(0, len(label_list)):
-            Total_score_list_cs.append(score_list[i]) 
-            if score_list[i] == None:
-                print(score_list[i])
-        # if there is nan in Total_score_list_cs, print it out
-        fpr, tpr, thresholds_cs = metrics.roc_curve(label_list, Total_score_list_cs)
-        threshold_cs, optimal_point = Find_Optimal_Cutoff(TPR=tpr, FPR=fpr, threshold=thresholds_cs)
-
-        for i in range(len(Total_score_list_cs)):
-            score = Total_score_list_cs[i]
-            if (score >= threshold_cs and label_list[i] == 1):
-                TP += 1
-            elif (score < threshold_cs and label_list[i] == 0):
-                TN += 1
-            elif (score >= threshold_cs and label_list[i] == 0):
-                FP += 1
-            elif (score < threshold_cs and label_list[i] == 1):
-                FN += 1
-
-        APCER = FP / (TN + FP)
-        NPCER = FN / (FN + TP)
-        
-        if record[1]>((APCER + NPCER) / 2):
-                record[0]=step
-                record[1]=((APCER + NPCER) / 2)
-                record[2]=roc_auc_score(label_list, score_list)
-                record[3]=APCER
-                record[4]=NPCER
-                record[5]=calculate_tpr_at_fpr(label_list, NormalizeData(score_list))
-
-        log_list.append([step, np.round(APCER, 4), np.round(NPCER, 4), np.round((APCER + NPCER) / 2, 4)])
-
-        logging.info('[epoch 1 step %d] APCER %.4f BPCER %.4f ACER %.4f  AUC %.4f tpr_fpr0001 %.4f'
-                % (step, np.round(APCER, 4), np.round(NPCER, 4), np.round((APCER + NPCER) / 2, 4), np.round(roc_auc_score(label_list, score_list), 4) , calculate_interpolated_tpr(fpr, tpr, fpr_threshold=0.001)))
-        # logging.info('[epoch %d] APCER %.4f BPCER %.4f ACER %.4f  AUC %.4f tpr_fpr0001 %.4f'
-        #         % (step, np.round(APCER, 4), np.round(NPCER, 4), np.round((APCER + NPCER) / 2, 4), np.round(roc_auc_score(label_list, score_list), 4) , calculate_interpolated_tpr(fpr, tpr, fpr_threshold=0.001)))
+    logging.info('[epoch %d] APCER %.4f BPCER %.4f ACER %.4f  AUC %.4f tpr_fpr0001 %.4f'
+            % (epoch, np.round(APCER, 4), np.round(NPCER, 4), np.round((APCER + NPCER) / 2, 4), np.round(roc_auc_score(label_list, score_list), 4) , calculate_interpolated_tpr(fpr, tpr, fpr_threshold=0.001)))
 
 #from the log list select 5 best acer
 log_list.sort(key=lambda x: x[3])
 print(log_list)
+logging.info(f"Modalities BEST Epoch {str(record[0])} ACER {str(record[1])} AUC {str(record[2])} APCER {str(record[3])} BPCER {str(record[4])} tpr_fpr0001 {str(record[5])}")
+
 '''
 # from the log list test the 5 best acer in if epoch %5 == 0:
 with torch.no_grad():
@@ -335,4 +287,3 @@ with torch.no_grad():
             logging.info('[epoch %d] APCER %.4f BPCER %.4f ACER %.4f  AUC %.4f tpr_fpr0001 %.4f'
                 % (epoch, np.round(APCER, 4), np.round(NPCER, 4), np.round((APCER + NPCER) / 2, 4), np.round(roc_auc_score(label_list, score_list), 4) , calculate_interpolated_tpr(fpr, tpr, fpr_threshold=0.001)))
 '''
-logging.info(f"Modalities BEST Epoch 1 Step {str(record[0])} ACER {str(record[1])} AUC {str(record[2])} APCER {str(record[3])} BPCER {str(record[4])} tpr_fpr0001 {str(record[5])}")

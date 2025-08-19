@@ -1,18 +1,16 @@
-import torch.nn as nn
-import torch.nn.functional as F
-import torchvision.models as models
-import torch
-
-
 import math
 
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchvision.models as models
 import torch.utils.model_zoo as model_zoo
 from torch.nn import Parameter
 import pdb
 import numpy as np
 import timm
 import timm.models.vision_transformer
+from transformers import MobileViTFeatureExtractor, MobileViTForImageClassification
 
 
 # class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
@@ -97,6 +95,35 @@ import timm.models.vision_transformer
 #         logits = self.fc(self.drop(regmap8.squeeze(-1).squeeze(-1)))
         
 #         return logits
+
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+class ViT_AvgPool_2modal_CrossAtten_Channel(nn.Module):
+    def __init__(self, pretrained=True):
+        super(ViT_AvgPool_2modal_CrossAtten_Channel, self).__init__()
+        self.model = timm.create_model('mobilevit_xxs.cvnets_in1k', pretrained=pretrained, num_classes=0)
+        # print(vit)
+        # print(count_parameters(vit))
+        # data_config = timm.data.resolve_model_data_config(model)
+        # print(data_config)
+        self.classifier = nn.Linear(320 * 2, 2)  # Output layer for classification
+
+    def forward(self, R, I):
+        R = self.model.forward_features(R)
+        I = self.model.forward_features(I)
+
+        R = self.model.forward_head(R, pre_logits=True)
+        I = self.model.forward_head(I, pre_logits=True)
+        # print(R.shape, I.shape)
+
+        logits_all = torch.cat([R, I], dim=1)
+        out_all = self.classifier(logits_all)
+
+        return out_all, R, I
+
 
 class ViT_AvgPool_3modal_CrossAtten_Channel(nn.Module):
     def __init__(self, pretrained=True):
@@ -287,12 +314,10 @@ class UGCA(nn.Module):
 # main
 if __name__ == '__main__':
     # Create a model instance
-    model = ViT_AvgPool_3modal_CrossAtten_Channel()
+    model = ViT_AvgPool_2modal_CrossAtten_Channel()
     # Create dummy inputs
-    R = torch.randn(1, 3, 224, 224)
+    R = torch.randn(1, 3, 256, 256)
     I = R
-    D = R
     # Forward pass
-    output = model(R, I, D)
+    output, R, I = model(R, I)
     print(output)
-    
