@@ -1,59 +1,73 @@
-import onnxruntime as ort
+import onnxruntime
 import numpy as np
 import cv2
 import torch
+import torch.nn.functional as F
+import torchvision.transforms.functional as TF
 
 from models.ViT import ViT_AvgPool_2modal_CrossAtten_Channel
 
 
-def onnx_run(onnx_path, input1, input2):
-    session = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
+def NormalizeData_torch(data):
+    return (data - torch.min(data)) / (torch.max(data) - torch.min(data))
+
+
+def onnx_run(rgb_data, ir_data, onnx_model):
+    so = onnxruntime.SessionOptions()
+    so.log_severity_level = 3
+    ort_session = onnxruntime.InferenceSession(onnx_model, so)
     
-    input_names = [inp.name for inp in session.get_inputs()]
-    print("Input names:", input_names)
-    inputs = {
-        input_names[0]: input1,
-        input_names[1]: input2,
-    }
+    def to_numpy(tensor):
+        if tensor.requires_grad:
+            np_tensor = tensor.detach().cpu().numpy()
+        else:
+            np_tensor = tensor.cpu().numpy()
+        return np_tensor
     
-    outputs = session.run(None, inputs)
-    for i, out in enumerate(outputs):
-        print(f"Output {i}: shape={out.shape}")
-    return outputs
+    ort_inputs = {'R_data': to_numpy(rgb_data),
+                  'I_data': to_numpy(ir_data)}
+    
+    pred, _, _ = ort_session.run(None, ort_inputs)
+    return pred
 
 
 if __name__ == "__main__":
+    threshold = 0.99977154
+
     SIZE = 256
-    RGB_path = cv2.imread('./data/real/color/1.jpg')
-    RGB_img = cv2.resize(RGB_path, (SIZE, SIZE))
+    RGB_img = cv2.imread('./data/fake/color/11.jpg')
     RGB_img = cv2.cvtColor(RGB_img, cv2.COLOR_BGR2RGB)
+    RGB_img = cv2.resize(RGB_img, (SIZE, SIZE))
     RGB_img = np.transpose(RGB_img, (2, 0, 1))  # 3*256*256, RGB
-    RGB_img = torch.from_numpy(RGB_img).float()  # Convert to float tensor
-    RGB_img.div_(255).sub_(0.5).div_(0.5)
+    RGB_img = torch.Tensor(RGB_img).cuda()
+    RGB_img = NormalizeData_torch(RGB_img)
     RGB_img = torch.unsqueeze(RGB_img, 0)
 
-    IR_path = cv2.imread('./data/real/ir/1.jpg')
-    IR_img = cv2.resize(IR_path, (SIZE, SIZE))
+    IR_img = cv2.imread('./data/fake/ir/11.jpg')
     IR_img = cv2.cvtColor(IR_img, cv2.COLOR_BGR2RGB)
+    IR_img = cv2.resize(IR_img, (SIZE, SIZE))
     IR_img = np.transpose(IR_img, (2, 0, 1))  # 3*256*256, IR
-    IR_img = torch.from_numpy(IR_img).float()  # Convert to float tensor
-    IR_img.div_(255).sub_(0.5).div_(0.5)
+    IR_img = torch.Tensor(IR_img).cuda()
+    IR_img = NormalizeData_torch(IR_img)
     IR_img = torch.unsqueeze(IR_img, 0)
+    IR_img = TF.rgb_to_grayscale(IR_img, num_output_channels=3)
+    print(RGB_img.shape, IR_img.shape)
 
     # run pt
+    device_id = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
     pt_model = './saved/FASNet-epoch10.tar'
     weight = torch.load(pt_model, weights_only=True)
-    net = ViT_AvgPool_2modal_CrossAtten_Channel()
+    net = ViT_AvgPool_2modal_CrossAtten_Channel().to(device_id)
     net.load_state_dict(weight, strict=True)
     net.eval()
-    pt_feat, R, I = net(RGB_img, IR_img)
+    pred, R, I = net(RGB_img, IR_img)
+    score = F.softmax(pred, dim=1).cpu().data.numpy()[:, 1]  # multi class
+    print(score)
 
     # run onnx
     onnx_path = './saved/FASNet-epoch10.onnx'
-    RGB_img = RGB_img.numpy()  # Convert to numpy array
-    IR_img = IR_img.numpy()  # Convert to numpy array
-    onnx_feat, R, I = onnx_run(onnx_path, RGB_img, IR_img)
+    pred = onnx_run(RGB_img, IR_img, onnx_path)[0]
+    pred = torch.tensor(pred, dtype=torch.float32)
 
-    # See Mean squared Error
-    print("PT output shape:", pt_feat)
-    print("ONNX output shape:", onnx_feat)
+    score = F.softmax(pred)[1].item()
+    print(score)
