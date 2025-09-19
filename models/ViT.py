@@ -1,4 +1,6 @@
 import math
+import random
+import os
 
 import torch
 import torch.nn as nn
@@ -12,6 +14,24 @@ import timm
 import timm.models.vision_transformer
 from transformers import MobileViTFeatureExtractor, MobileViTForImageClassification
 
+
+def set_seed(seed: int = 42):
+    """Sets the random seed for reproducibility across PyTorch, NumPy, and Python's random module."""""
+    random.seed(seed)  # Python's built-in random module
+    np.random.seed(seed)  # NumPy
+    torch.manual_seed(seed)  # PyTorch CPU
+    torch.cuda.manual_seed_all(seed)  # PyTorch CUDA (for all GPUs)
+
+    # For deterministic CUDA operations (optional, can impact performance)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
+    # For PyTorch versions 1.8.0 and later, you can also use:
+    torch.use_deterministic_algorithms(True)
+    # This will raise an error if a deterministic algorithm is not available for an operation.
+
+    print(f"Random seed set to {seed}")
 
 # class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
 
@@ -104,7 +124,11 @@ def count_parameters(model):
 class ViT_AvgPool_2modal_CrossAtten_Channel(nn.Module):
     def __init__(self, pretrained=True):
         super(ViT_AvgPool_2modal_CrossAtten_Channel, self).__init__()
-        self.model = timm.create_model('mobilevit_xxs.cvnets_in1k', pretrained=pretrained, num_classes=0)
+        self.model = timm.create_model(
+            'mobilevit_xxs.cvnets_in1k',
+            pretrained=True,
+            num_classes=0,  # remove classifier nn.Linear
+        )
         # print(vit)
         # print(count_parameters(vit))
         # data_config = timm.data.resolve_model_data_config(model)
@@ -313,11 +337,14 @@ class UGCA(nn.Module):
 
 # main
 if __name__ == '__main__':
+    set_seed(0)
     # Create a model instance
     model = ViT_AvgPool_2modal_CrossAtten_Channel()
+    model.eval()
     # Create dummy inputs
-    R = torch.randn(1, 3, 256, 256)
+    R = torch.zeros(1, 3, 256, 256)
     I = R
+    # print(count_parameters(model))
     # Forward pass
     output, R, I = model(R, I)
     print(output)

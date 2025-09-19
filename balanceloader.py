@@ -100,6 +100,23 @@ class FAS_Dataset(Dataset):
                 self.total_depth = self.alld
                 self.total_ir = self.alli
                 self.total_labels = self.labels
+            elif i == 'val_list.txt':
+                data_path = os.path.join(root, i)
+                with open(data_path, 'r') as f:
+                    for line in f.readlines():
+                        rgb, depth, ir, label = line.strip().split(' ')
+                        label = int(label)
+                        rgb = os.path.join(root, rgb)
+                        depth = os.path.join(root, depth)
+                        ir = os.path.join(root, ir)
+                        self.allr.append(rgb)
+                        self.alld.append(depth)
+                        self.alli.append(ir)
+                        self.labels.append(label)
+                self.total_rgb = self.allr
+                self.total_depth = self.alld
+                self.total_ir = self.alli
+                self.total_labels = self.labels
 
     def transform(self, img1, img2, img3):
         # Random crop
@@ -154,28 +171,18 @@ class FAS_Dataset(Dataset):
     def __getitem__(self, idx):
         
         # get rgb
-        rgb = self.total_rgb[idx]
+        rgb_path = self.total_rgb[idx]
         # get depth
-        depth = self.total_depth[idx]
+        depth_path = self.total_depth[idx]
         # get ir
-        ir = self.total_ir[idx]
+        ir_path = self.total_ir[idx]
         
         labels = self.total_labels[idx]
         # atktype = self.atktype[idx]
         
-                
-        # rgb_img = torch.stack(get_frame(rgb, self.transform_face)).transpose(0, 1)
-        # depth_img = torch.stack(get_frame(depth, self.transform_face)).transpose(0, 1)
-        # ir_img = torch.stack(get_frame(ir, self.transform_face)).transpose(0, 1)
-        
-        if self.protocol[0] == 'train' or self.protocol[0] == 'intraS':
-            rgb = Image.fromarray(rgb)
-            depth = Image.fromarray(depth)
-            ir = Image.fromarray(ir)
-        else:
-            rgb = get_frame(rgb)
-            depth = get_frame(depth)
-            ir = get_frame(ir)
+        rgb = get_frame(rgb_path)
+        depth = get_frame(depth_path)
+        ir = get_frame(ir_path)
         
         rgb, depth, ir = self.transform(rgb, depth, ir)
 

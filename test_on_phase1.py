@@ -76,7 +76,7 @@ def NormalizeData_torch(data):
 parser = argparse.ArgumentParser(description="config")
 parser.add_argument("--train_dataset", type=str, default='CASIA_SURF')
 parser.add_argument("--test_dataset", type=str, default='CASIA_SURF')
-parser.add_argument("--data_root", type=str, default='/media/back/home/chuck/Dataset/CASIA_SURF/challenge/train')
+parser.add_argument("--data_root", type=str, default='/media/back/home/chuck/Dataset/CASIA_SURF/challenge/phase1/valid')
 parser.add_argument("--result_path", type=str, default='./saved/')
 parser.add_argument("--batch_size", type=int, default=512)
 args = parser.parse_args()
@@ -95,7 +95,7 @@ date = '%(asctime)s %(levelname)s: %(message)s'
 logging.basicConfig(level=logging.INFO, format=date, handlers=handlers)
 
 
-data_loader = get_loader(root=root, protocol=['train_list.txt'], batch_size=batch_size, shuffle=False, mode='test', size=256, cls=None)
+data_loader = get_loader(root=root, protocol=['val_list.txt'], batch_size=batch_size, shuffle=False, mode='test', size=256, cls=None)
 
 Fas_Net = ViT_AvgPool_2modal_CrossAtten_Channel().to(device_id)
 
@@ -138,6 +138,7 @@ with torch.no_grad():
         
         pred, _, _ = Fas_Net(rgb_img, ir_img)
          
+        score = F.softmax(pred, dim=1).cpu().data.numpy()
         score = F.softmax(pred, dim=1).cpu().data.numpy()[:, 1]  # multi class
 
         for j in range(rgb_img.size(0)):
